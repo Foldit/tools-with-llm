@@ -1,0 +1,39 @@
+请根据以下信息进行代码Review，并输出JSON。
+
+输出JSON格式如下：
+{
+  "summary": "",
+  "overall_decision": "approved|approved_with_suggestions|changes_requested|manual_confirmation_required",
+  "findings": [
+    {
+      "title": "",
+      "severity": "critical|major|minor|suggestion",
+      "category": "requirement|typescript|vue3|react|test|maintainability|risk",
+      "file": "",
+      "evidence": "",
+      "impact": "",
+      "recommendation": "",
+      "needs_manual_confirmation": false
+    }
+  ],
+  "coverage_assessment": {
+    "covered": [],
+    "possibly_missing": [],
+    "unclear_points": []
+  }
+}
+
+需求摘要：
+{{requirement_summary}}
+
+变更文件列表：
+{{diff_result.changed_files}}
+
+提交记录：
+{{diff_result.commit_list}}
+
+代码Diff：
+{{diff_result.diff_text}}
+
+代码上下文：
+{{context_bundle}}

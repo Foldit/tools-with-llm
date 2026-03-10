@@ -1,0 +1,10 @@
+{
+  "action": "run_code_review_mvp",
+  "repo_path": "/workspace/project-a",
+  "target_branch": "main",
+  "source_branch": "feature/order-filter",
+  "manual_requirement": "新增订单筛选能力，支持按状态和创建时间筛选，刷新页面后保留筛选条件，不修改导出逻辑。",
+  "devops_url": "https://devops.example.com/workitem/12345",
+  "devops_text": "需求标题：订单列表新增筛选。验收标准：支持状态筛选、时间筛选、刷新后保留最近一次筛选条件。",
+  "output_path": "/tmp/review-report.md"
+}

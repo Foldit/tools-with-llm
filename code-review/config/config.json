@@ -1,0 +1,19 @@
+{
+  "review": {
+    "max_files": 20,
+    "max_diff_chars": 120000,
+    "max_context_chars_per_file": 8000,
+    "allowed_source_roots": ["src/", "packages/"],
+    "excluded_extensions": [".png", ".jpg", ".jpeg", ".gif", ".svg", ".lock", ".map"]
+  },
+  "llm": {
+    "base_url": "http://127.0.0.1:8000/v1",
+    "api_key": "EMPTY",
+    "model": "glm-4.5",
+    "temperature": 0.2,
+    "timeout": 120
+  },
+  "report": {
+    "output_dir": "./output"
+  }
+}

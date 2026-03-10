@@ -1,0 +1,22 @@
+请根据以下输入，输出结构化需求摘要。
+
+输出JSON格式如下：
+{
+  "title": "",
+  "business_goal": [],
+  "acceptance_criteria": [],
+  "out_of_scope": [],
+  "risk_points": [],
+  "unclear_points": [],
+  "main_source": "manual_requirement",
+  "summary": ""
+}
+
+人工需求说明：
+{{task.manual_requirement}}
+
+DevOps URL：
+{{task.devops_url}}
+
+DevOps 文本：
+{{task.devops_text}}
