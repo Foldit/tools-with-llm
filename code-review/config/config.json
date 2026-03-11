@@ -11,9 +11,13 @@
     "api_key": "EMPTY",
     "model": "glm-4.5",
     "temperature": 0.2,
-    "timeout": 120
+    "timeout": 120,
+    "max_tokens": 128000
   },
   "report": {
     "output_dir": "./output"
+  },
+  "other": {
+    "cal_token": false
   }
 }

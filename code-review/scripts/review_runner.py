@@ -2,6 +2,8 @@ import json
 import os
 from pathlib import Path
 
+import tiktoken
+
 from common import read_text, render_template, expand_path
 from input_node import main as input_main
 from diff_node import main as diff_main
@@ -119,6 +121,42 @@ def run_review_task(task_input: dict) -> dict:
 
     print("整理需求...")
     requirement_summary = run_requirement_step(llm, task)
+
+    model_name = config["llm"]["model"]
+    
+    if config.get("other", {}).get("cal_token", False):
+
+        user_template = load_prompt("requirement_user.txt")
+        user_prompt = render_template(user_template, {
+            "task.manual_requirement": task["manual_requirement"],
+            "task.devops_url": task.get("devops_url", ""),
+            "task.devops_text": task.get("devops_text", "")
+        })
+
+        try:
+            # 尝试获取对应模型的特定编码（如 gpt-4o, gpt-3.5-turbo 等）
+            encoding = tiktoken.encoding_for_model(model_name)
+        except KeyError:
+            # 如果模型名称不在 tiktoken 默认支持列表中，回退到目前最常用的 cl100k_base
+            encoding = tiktoken.get_encoding("cl100k_base")
+            
+
+        exact_tokens = len(encoding.encode(user_prompt))
+        print(f"当前任务上下文的精确 Token 数目为: {exact_tokens}")
+
+        if exact_tokens > config["llm"]["max_tokens"]:
+            print(f"\n⚠️ 警告: 实际 Token 数量 ({exact_tokens}) 已超过 {config["llm"]["max_tokens"]} 上限！")
+            choice = input("继续执行极大概率会导致接口报错或截断。是否仍要强制执行？(y/n): ").strip().lower()
+            if choice != 'y':
+                print("已取消本次 Code Review。")
+                return {
+                    "status": "cancelled",
+                    "report_path": "",
+                    "review_result": {
+                        "overall_decision": "cancelled",
+                        "summary": f"用户因 Token 数过大 ({exact_tokens}) 手动取消了本次审核。"
+                    }
+                }
 
     print("进行code review...")
     review_result = run_review_step(llm, requirement_summary, diff_result, context_bundle)
