@@ -2,8 +2,6 @@ import os
 import re
 import subprocess
 
-from common import truncate_text
-
 try:
     from tree_sitter import Language, Parser
     import tree_sitter_javascript
@@ -405,6 +403,22 @@ def pick_symbol_range(blocks: list[dict], target_line: int, max_symbol_context_l
     return (start, end)
 
 
+def pick_symbol_range_with_reason(blocks: list[dict], target_line: int,
+                                  max_symbol_context_lines: int) -> tuple[tuple[int, int] | None, str | None]:
+    containing = [
+        block for block in blocks
+        if block["start"] <= target_line <= block["end"]
+    ]
+    if not containing:
+        return None, "no_symbol_hit"
+
+    symbol_range = pick_symbol_range(blocks, target_line, max_symbol_context_lines)
+    if symbol_range is None:
+        return None, "symbol_too_large"
+
+    return symbol_range, None
+
+
 def build_context_ranges(hunks: list[dict], status: str, total_lines: int,
                          context_before: int, context_after: int) -> list[tuple[int, int]]:
     ranges = []
@@ -422,36 +436,86 @@ def build_context_ranges(hunks: list[dict], status: str, total_lines: int,
 
 
 def build_symbol_context_ranges(lines: list[str], hunks: list[dict], status: str, file_type: str,
-                                max_symbol_context_lines: int) -> tuple[list[tuple[int, int]], str | None]:
+                                max_symbol_context_lines: int) -> tuple[list[tuple[int, int]], str | None, dict]:
+    events = {
+        "strategy_chain": [],
+        "fallback_reason": None,
+        "strategy_confidence": 0.35
+    }
+
     if file_type not in SUPPORTED_SYMBOL_FILE_TYPES:
-        return [], None
+        events["strategy_chain"].append("unsupported_file_type")
+        events["fallback_reason"] = "unsupported_file_type"
+        return [], None, events
 
     use_old_lines = status.startswith("D")
-    ast_blocks = build_vue_ast_symbol_blocks(lines) if file_type == "vue" else build_ast_symbol_blocks(lines, file_type)
-    ast_ranges = []
+    ast_blocks = []
+    ast_build_error = None
+    if file_type == "vue" or file_type in AST_SUPPORTED_FILE_TYPES:
+        try:
+            ast_blocks = build_vue_ast_symbol_blocks(lines) if file_type == "vue" else build_ast_symbol_blocks(lines, file_type)
+        except Exception:
+            ast_build_error = "ast_parse_failed"
 
-    for hunk in hunks:
-        target_line = hunk["old_start"] if use_old_lines else hunk["new_start"]
-        symbol_range = pick_symbol_range(ast_blocks, target_line, max_symbol_context_lines)
-        if symbol_range is not None:
-            ast_ranges.append(symbol_range)
+    ast_ranges = []
+    ast_fallback_reasons = []
+
+    if file_type in AST_SUPPORTED_FILE_TYPES or file_type == "vue":
+        if not TREE_SITTER_AVAILABLE:
+            events["strategy_chain"].append("symbol-ast:ast_unavailable")
+        elif ast_build_error is not None:
+            events["strategy_chain"].append(f"symbol-ast:{ast_build_error}")
+            events["fallback_reason"] = ast_build_error
+        elif ast_blocks:
+            for hunk in hunks:
+                target_line = hunk["old_start"] if use_old_lines else hunk["new_start"]
+                symbol_range, reason = pick_symbol_range_with_reason(ast_blocks, target_line, max_symbol_context_lines)
+                if symbol_range is not None:
+                    ast_ranges.append(symbol_range)
+                elif reason:
+                    ast_fallback_reasons.append(reason)
+        else:
+            events["strategy_chain"].append("symbol-ast:no_symbol_blocks")
 
     if ast_ranges:
-        return merge_ranges(ast_ranges), "symbol-ast"
+        events["strategy_chain"].append("symbol-ast:selected")
+        events["strategy_confidence"] = 0.95
+        return merge_ranges(ast_ranges), "symbol-ast", events
+
+    if ast_fallback_reasons and events["fallback_reason"] is None:
+        events["fallback_reason"] = ast_fallback_reasons[0]
+
+    if file_type in AST_SUPPORTED_FILE_TYPES or file_type == "vue":
+        last_reason = events["fallback_reason"] or "no_symbol_hit"
+        events["strategy_chain"].append(f"symbol-ast:fallback({last_reason})")
 
     symbol_blocks = build_symbol_blocks(lines, file_type)
     heuristic_ranges = []
+    heuristic_fallback_reasons = []
 
     for hunk in hunks:
         target_line = hunk["old_start"] if use_old_lines else hunk["new_start"]
-        symbol_range = pick_symbol_range(symbol_blocks, target_line, max_symbol_context_lines)
+        symbol_range, reason = pick_symbol_range_with_reason(symbol_blocks, target_line, max_symbol_context_lines)
         if symbol_range is not None:
             heuristic_ranges.append(symbol_range)
+        elif reason:
+            heuristic_fallback_reasons.append(reason)
 
     if heuristic_ranges:
-        return merge_ranges(heuristic_ranges), "symbol-heuristic"
+        events["strategy_chain"].append("symbol-heuristic:selected")
+        events["strategy_confidence"] = 0.72
+        return merge_ranges(heuristic_ranges), "symbol-heuristic", events
 
-    return [], None
+    fallback_reason = events["fallback_reason"]
+    if fallback_reason is None and heuristic_fallback_reasons:
+        fallback_reason = heuristic_fallback_reasons[0]
+    if fallback_reason is None:
+        fallback_reason = "no_symbol_hit"
+
+    events["fallback_reason"] = fallback_reason
+    events["strategy_chain"].append(f"symbol-heuristic:fallback({fallback_reason})")
+
+    return [], None, events
 
 
 def render_ranges(lines: list[str], ranges: list[tuple[int, int]], max_snippets: int) -> str:
@@ -469,11 +533,41 @@ def render_ranges(lines: list[str], ranges: list[tuple[int, int]], max_snippets:
     return "\n".join(chunks)
 
 
+def rank_ranges_by_hunk_proximity(ranges: list[tuple[int, int]], hunks: list[dict], use_old_lines: bool) -> list[tuple[int, int]]:
+    if not hunks:
+        return sorted(ranges)
+
+    anchor_lines = [hunk["old_start"] if use_old_lines else hunk["new_start"] for hunk in hunks]
+
+    def score(item: tuple[int, int]) -> tuple[int, int, int]:
+        start, end = item
+        midpoint = (start + end) // 2
+        distance = min(abs(midpoint - anchor) for anchor in anchor_lines)
+        span = end - start + 1
+        return distance, span, start
+
+    return sorted(ranges, key=score)
+
+
+def select_ranges_with_limit(ranges: list[tuple[int, int]], hunks: list[dict], status: str,
+                             hard_limit: int) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    if hard_limit <= 0 or len(ranges) <= hard_limit:
+        return ranges, []
+
+    prioritized = rank_ranges_by_hunk_proximity(ranges, hunks, status.startswith("D"))
+    selected = sorted(prioritized[:hard_limit])
+    selected_set = set(selected)
+    omitted = [item for item in ranges if item not in selected_set]
+    return selected, omitted
+
+
 def build_file_context(repo_path: str, target_branch: str, source_branch: str, item: dict,
                        max_context_chars_per_file: int, context_before: int,
                        context_after: int, max_snippets_per_file: int,
                        max_symbol_context_lines: int,
-                       warning_max_context_chars_per_file: int | None) -> tuple[str, str, bool, str | None]:
+                       warning_max_context_chars_per_file: int | None,
+                       context_ranges_hard_limit: int,
+                       context_ranges_soft_warning: int | None) -> dict:
     rel_path = item["path"]
     status = item["status"]
     file_type = detect_file_type(rel_path)
@@ -485,35 +579,103 @@ def build_file_context(repo_path: str, target_branch: str, source_branch: str, i
         content = read_text_file(abs_path)
 
     if not content:
-        return "", "missing", False, f"missing_or_unreadable:{rel_path}"
+        return {
+            "snippet": "",
+            "context_strategy": "missing",
+            "context_truncated": False,
+            "warning": f"missing_or_unreadable:{rel_path}",
+            "strategy_chain": ["missing_or_unreadable"],
+            "strategy_confidence": 0.0,
+            "fallback_reason": "missing_or_unreadable",
+            "omitted_ranges": []
+        }
 
     lines = content.splitlines()
     if not lines:
-        return "", "empty", False, f"empty:{rel_path}"
+        return {
+            "snippet": "",
+            "context_strategy": "empty",
+            "context_truncated": False,
+            "warning": f"empty:{rel_path}",
+            "strategy_chain": ["empty_file"],
+            "strategy_confidence": 0.0,
+            "fallback_reason": "empty_file",
+            "omitted_ranges": []
+        }
 
     hunks = item.get("hunks", [])
-    symbol_ranges, symbol_strategy = build_symbol_context_ranges(lines, hunks, status, file_type, max_symbol_context_lines)
+    symbol_ranges, symbol_strategy, strategy_events = build_symbol_context_ranges(
+        lines,
+        hunks,
+        status,
+        file_type,
+        max_symbol_context_lines
+    )
     if symbol_ranges:
         ranges = symbol_ranges
         strategy = symbol_strategy
     else:
         ranges = build_context_ranges(hunks, status, len(lines), context_before, context_after)
         strategy = "hunk"
+        strategy_events["strategy_chain"].append("hunk:selected")
+        if strategy_events.get("strategy_confidence", 0.0) < 0.55:
+            strategy_events["strategy_confidence"] = 0.55
 
     if not ranges:
         ranges = [(1, min(len(lines), context_before + context_after + 1))]
         strategy = "fallback"
+        strategy_events["strategy_chain"].append("fallback:selected")
+        if strategy_events.get("fallback_reason") is None:
+            strategy_events["fallback_reason"] = "no_hunks_available"
+        strategy_events["strategy_confidence"] = 0.2
 
-    rendered_snippet = render_ranges(lines, ranges, max_snippets_per_file)
-    truncated = len(rendered_snippet) > max_context_chars_per_file
-    warning = None
-    if warning_max_context_chars_per_file and len(rendered_snippet) > warning_max_context_chars_per_file:
+    selected_ranges, omitted_ranges = select_ranges_with_limit(
+        ranges,
+        hunks,
+        status,
+        context_ranges_hard_limit or max_snippets_per_file
+    )
+
+    if omitted_ranges:
+        strategy_events["strategy_chain"].append("range-limit:hard-limit-applied")
+    if context_ranges_soft_warning is not None and len(ranges) > context_ranges_soft_warning:
         warning = (
+            f"context_warning:{rel_path}: range_count={len(ranges)} > "
+            f"context_ranges_soft_warning={context_ranges_soft_warning}"
+        )
+    else:
+        warning = None
+
+    rendered_snippet = render_ranges(lines, selected_ranges, max_snippets_per_file)
+    truncated = bool(omitted_ranges)
+    if warning_max_context_chars_per_file and len(rendered_snippet) > warning_max_context_chars_per_file:
+        char_warning = (
             f"context_warning:{rel_path}: rendered_context_chars={len(rendered_snippet)} > "
             f"warning_max_context_chars_per_file={warning_max_context_chars_per_file}"
         )
+        warning = f"{warning}; {char_warning}" if warning else char_warning
 
-    return truncate_text(rendered_snippet, max_context_chars_per_file), strategy, truncated, warning
+    if max_context_chars_per_file and len(rendered_snippet) > max_context_chars_per_file:
+        warning = (
+            f"{warning}; context_note:{rel_path}: rendered_context_chars={len(rendered_snippet)} exceeds "
+            f"max_context_chars_per_file={max_context_chars_per_file} (not force-truncated)"
+            if warning
+            else (
+                f"context_note:{rel_path}: rendered_context_chars={len(rendered_snippet)} exceeds "
+                f"max_context_chars_per_file={max_context_chars_per_file} (not force-truncated)"
+            )
+        )
+
+    return {
+        "snippet": rendered_snippet,
+        "context_strategy": strategy,
+        "context_truncated": truncated,
+        "warning": warning,
+        "strategy_chain": strategy_events.get("strategy_chain", []),
+        "strategy_confidence": strategy_events.get("strategy_confidence", 0.0),
+        "fallback_reason": strategy_events.get("fallback_reason"),
+        "omitted_ranges": omitted_ranges
+    }
 
 
 def main(inputs: dict) -> dict:
@@ -524,6 +686,8 @@ def main(inputs: dict) -> dict:
     context_before = inputs.get("context_lines_before_hunk", 20)
     context_after = inputs.get("context_lines_after_hunk", 20)
     max_snippets_per_file = inputs.get("max_context_snippets_per_file", 6)
+    context_ranges_hard_limit = inputs.get("context_ranges_hard_limit", max_snippets_per_file)
+    context_ranges_soft_warning = inputs.get("context_ranges_soft_warning")
     max_symbol_context_lines = inputs.get("max_symbol_context_lines", 160)
     warning_max_context_chars_per_file = inputs.get("warning_max_context_chars_per_file")
     target_branch = task["target_branch"]
@@ -534,10 +698,11 @@ def main(inputs: dict) -> dict:
     truncated_files = []
     warnings = []
     strategy_counts = {}
+    fallback_reason_counts = {}
 
     for item in diff_result["changed_files"]:
         rel_path = item["path"]
-        snippet, context_strategy, truncated, warning = build_file_context(
+        context_data = build_file_context(
             repo_path,
             target_branch,
             source_branch,
@@ -547,8 +712,14 @@ def main(inputs: dict) -> dict:
             context_after,
             max_snippets_per_file,
             max_symbol_context_lines,
-            warning_max_context_chars_per_file
+            warning_max_context_chars_per_file,
+            context_ranges_hard_limit,
+            context_ranges_soft_warning
         )
+        snippet = context_data["snippet"]
+        context_strategy = context_data["context_strategy"]
+        truncated = context_data["context_truncated"]
+        warning = context_data["warning"]
         if not snippet:
             skipped_files.append({"file": rel_path, "reason": warning or context_strategy})
             continue
@@ -558,6 +729,9 @@ def main(inputs: dict) -> dict:
         if warning:
             warnings.append(warning)
         strategy_counts[context_strategy] = strategy_counts.get(context_strategy, 0) + 1
+        fallback_reason = context_data.get("fallback_reason")
+        if fallback_reason:
+            fallback_reason_counts[fallback_reason] = fallback_reason_counts.get(fallback_reason, 0) + 1
 
         files.append({
             "file": rel_path,
@@ -566,6 +740,10 @@ def main(inputs: dict) -> dict:
             "hunk_count": len(item.get("hunks", [])),
             "context_strategy": context_strategy,
             "context_truncated": truncated,
+            "strategy_chain": context_data.get("strategy_chain", []),
+            "strategy_confidence": context_data.get("strategy_confidence", 0.0),
+            "fallback_reason": fallback_reason,
+            "omitted_ranges": context_data.get("omitted_ranges", []),
             "snippet": snippet
         })
 
@@ -574,6 +752,7 @@ def main(inputs: dict) -> dict:
             "files": files,
             "summary": {
                 "strategy_counts": strategy_counts,
+                "fallback_reason_counts": fallback_reason_counts,
                 "skipped_files": skipped_files,
                 "truncated_files": truncated_files,
                 "warnings": warnings

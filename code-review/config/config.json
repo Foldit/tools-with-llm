@@ -9,7 +9,15 @@
     "context_lines_before_hunk": 20,
     "context_lines_after_hunk": 20,
     "max_context_snippets_per_file": 6,
+    "context_ranges_hard_limit": 6,
+    "context_ranges_soft_warning": 4,
     "max_symbol_context_lines": 160,
+    "diff_timeout_seconds": 30,
+    "diff_max_retries": 1,
+    "diff_retry_backoff_seconds": 1,
+    "strict_hunk_validation": true,
+    "max_hunks_per_file": 12,
+    "warning_max_hunks_per_file": 8,
     "allowed_source_roots": ["src/", "packages/"],
     "excluded_extensions": [".png", ".jpg", ".jpeg", ".gif", ".svg", ".lock", ".map"]
   },
@@ -28,6 +36,6 @@
   },
   "other": {
     "cal_token": false,
-    "token_overflow_strategy": "error"
+    "token_overflow_strategy": "truncate_retry"
   }
 }

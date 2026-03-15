@@ -35,11 +35,16 @@ class ReportNodeTests(unittest.TestCase):
                         {
                             "file": "src/app.ts",
                             "context_strategy": "symbol-ast",
+                            "strategy_confidence": 0.95,
+                            "strategy_chain": ["symbol-ast:selected"],
+                            "fallback_reason": None,
+                            "omitted_ranges": [[20, 25]],
                             "hunk_count": 1,
                             "context_truncated": False
                         }
                     ],
                     "summary": {
+                        "fallback_reason_counts": {"symbol_too_large": 1},
                         "skipped_files": [{"file": "src/missing.ts", "reason": "missing"}],
                         "truncated_files": ["src/app.ts"],
                         "warnings": ["context warn"]
@@ -48,6 +53,7 @@ class ReportNodeTests(unittest.TestCase):
                 "review_result": {
                     "overall_decision": "approved_with_suggestions",
                     "summary": "done",
+                    "warnings": ["review warning"],
                     "findings": [
                         {
                             "title": "manual check",
@@ -61,7 +67,10 @@ class ReportNodeTests(unittest.TestCase):
 
             markdown = Path(result["report_path"]).read_text(encoding="utf-8")
             self.assertIn("strategy=symbol-ast", markdown)
+            self.assertIn("strategy_chain", markdown)
+            self.assertIn("omitted_ranges=20-25", markdown)
             self.assertIn("Manual Confirmation Required", markdown)
+            self.assertIn("Review Warnings", markdown)
             self.assertIn("src/skip.ts", markdown)
 
 

@@ -29,6 +29,22 @@ class DiffNodeTests(unittest.TestCase):
         self.assertEqual("src/new.ts", files[0]["path"])
         self.assertEqual("src/old.ts", files[0]["old_path"])
 
+    def test_parse_hunks_with_stats_detects_invalid_counts(self):
+        diff_text = "@@ -10,2 +20,2 @@\n-old\n+new\n"
+        _, anomalies = diff_node.parse_hunks_with_stats(diff_text, strict_validation=True)
+        self.assertTrue(anomalies)
+        self.assertIn("invalid_hunk_counts", anomalies[0])
+
+    def test_determine_file_strategy_for_rename(self):
+        strategy, hunks_truncated, omitted_hunks = diff_node.determine_file_strategy(
+            {"status": "R100"},
+            "@@ -1 +1 @@\n-old\n+new\n",
+            max_hunks_per_file=1
+        )
+        self.assertEqual("rename-local-first", strategy)
+        self.assertFalse(hunks_truncated)
+        self.assertEqual(0, omitted_hunks)
+
 
 if __name__ == "__main__":
     unittest.main()

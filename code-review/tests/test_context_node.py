@@ -39,10 +39,12 @@ class ContextNodeTests(unittest.TestCase):
         ]
         hunks = [{"new_start": 2, "new_count": 1, "old_start": 2, "old_count": 1}]
 
-        ranges, strategy = context_node.build_symbol_context_ranges(lines, hunks, "M", "ts", 50)
+        ranges, strategy, events = context_node.build_symbol_context_ranges(lines, hunks, "M", "ts", 50)
 
         self.assertEqual([(1, 4)], ranges)
         self.assertIn(strategy, {"symbol-ast", "symbol-heuristic"})
+        self.assertIn("strategy_chain", events)
+        self.assertGreater(events.get("strategy_confidence", 0), 0)
 
     @patch("context_node.read_git_file")
     def test_overlong_symbol_falls_back_to_hunk(self, mock_read_git_file):
@@ -53,7 +55,7 @@ class ContextNodeTests(unittest.TestCase):
             "}"
         ])
 
-        snippet, strategy, truncated, warning = context_node.build_file_context(
+        context_data = context_node.build_file_context(
             repo_path="repo",
             target_branch="main",
             source_branch="feature",
@@ -67,13 +69,46 @@ class ContextNodeTests(unittest.TestCase):
             context_after=1,
             max_snippets_per_file=3,
             max_symbol_context_lines=5,
-            warning_max_context_chars_per_file=None
+            warning_max_context_chars_per_file=None,
+            context_ranges_hard_limit=3,
+            context_ranges_soft_warning=None
         )
 
-        self.assertEqual("hunk", strategy)
-        self.assertFalse(truncated)
-        self.assertIsNone(warning)
-        self.assertIn("@@ lines 9-11 @@", snippet)
+        self.assertEqual("hunk", context_data["context_strategy"])
+        self.assertFalse(context_data["context_truncated"])
+        self.assertIn("@@ lines 9-11 @@", context_data["snippet"])
+        self.assertIn("strategy_chain", context_data)
+
+    @patch("context_node.read_git_file")
+    def test_range_hard_limit_records_omitted_ranges(self, mock_read_git_file):
+        mock_read_git_file.return_value = "\n".join([f"line{i}" for i in range(1, 80)])
+
+        context_data = context_node.build_file_context(
+            repo_path="repo",
+            target_branch="main",
+            source_branch="feature",
+            item={
+                "path": "src/example.ts",
+                "status": "M",
+                "hunks": [
+                    {"new_start": 10, "new_count": 1, "old_start": 10, "old_count": 1},
+                    {"new_start": 30, "new_count": 1, "old_start": 30, "old_count": 1},
+                    {"new_start": 50, "new_count": 1, "old_start": 50, "old_count": 1}
+                ]
+            },
+            max_context_chars_per_file=8000,
+            context_before=1,
+            context_after=1,
+            max_snippets_per_file=10,
+            max_symbol_context_lines=1,
+            warning_max_context_chars_per_file=None,
+            context_ranges_hard_limit=1,
+            context_ranges_soft_warning=1
+        )
+
+        self.assertTrue(context_data["context_truncated"])
+        self.assertTrue(context_data["omitted_ranges"])
+        self.assertIn("range-limit:hard-limit-applied", context_data["strategy_chain"])
 
 
 if __name__ == "__main__":

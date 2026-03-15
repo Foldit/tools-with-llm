@@ -13,10 +13,19 @@ def format_findings(findings):
 
     chunks = ["## 4. Findings\n"]
     for idx, item in enumerate(findings, 1):
+        evidence = item.get("evidence", {})
+        if isinstance(evidence, dict):
+            evidence_text = (
+                f"{evidence.get('file', item.get('file', ''))}:{evidence.get('line', '')} | "
+                f"{evidence.get('snippet', '')}"
+            )
+        else:
+            evidence_text = str(evidence)
+
         chunks.append(f"### {idx}. [{item.get('severity', 'unknown')}] {item.get('title', '')}")
         chunks.append(f"- Category: {item.get('category', '')}")
         chunks.append(f"- File: {item.get('file', '')}")
-        chunks.append(f"- Evidence: {item.get('evidence', '')}")
+        chunks.append(f"- Evidence: {evidence_text}")
         chunks.append(f"- Impact: {item.get('impact', '')}")
         chunks.append(f"- Recommendation: {item.get('recommendation', '')}")
         chunks.append(f"- Needs Manual Confirmation: {item.get('needs_manual_confirmation', False)}")
@@ -28,11 +37,24 @@ def format_context_files(files):
     if not files:
         return "- 无"
 
-    return "\n".join(
-        f"- {item.get('file', '')} | strategy={item.get('context_strategy', '')} | "
-        f"hunks={item.get('hunk_count', 0)} | truncated={item.get('context_truncated', False)}"
-        for item in files
-    )
+    lines = []
+    for item in files:
+        omitted_ranges = item.get("omitted_ranges", [])
+        omitted_text = (
+            ", ".join(f"{start}-{end}" for start, end in omitted_ranges)
+            if omitted_ranges else "none"
+        )
+        strategy_chain = " -> ".join(item.get("strategy_chain", [])) or "none"
+        lines.append(
+            f"- {item.get('file', '')} | strategy={item.get('context_strategy', '')} | "
+            f"confidence={item.get('strategy_confidence', 0.0):.2f} | "
+            f"fallback_reason={item.get('fallback_reason', 'none') or 'none'} | "
+            f"hunks={item.get('hunk_count', 0)} | truncated={item.get('context_truncated', False)} | "
+            f"omitted_ranges={omitted_text}"
+        )
+        lines.append(f"  strategy_chain: {strategy_chain}")
+
+    return "\n".join(lines)
 
 
 def format_manual_confirmation(findings):
@@ -114,6 +136,9 @@ def main(inputs: dict) -> dict:
 ### Truncated Context Files
 {format_list(context_summary.get("truncated_files", []))}
 
+### Fallback Reason Counts
+{format_list([f"{reason}: {count}" for reason, count in context_summary.get("fallback_reason_counts", {}).items()])}
+
 ## 8. Transparency
 
 ### Manual Confirmation Required
@@ -124,6 +149,12 @@ def main(inputs: dict) -> dict:
 
 ### Context Warnings
 {format_list(context_summary.get("warnings", []))}
+
+### Review Warnings
+{format_list(review_result.get("warnings", []))}
+
+### Requirement Warnings
+{format_list(requirement_summary.get("warnings", []))}
 
 ### Skipped Diff Files
 {format_list(diff_result.get("skipped_files", []))}
