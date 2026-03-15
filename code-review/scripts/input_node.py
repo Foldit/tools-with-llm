@@ -37,6 +37,7 @@ def main(inputs: dict) -> dict:
     devops_url = inputs.get("devops_url", "").strip()
     devops_text = inputs.get("devops_text", "").strip()
     output_path = expand_path(inputs.get("output_path", "./output/review-report.md").strip())
+    config_overrides = inputs.get("config_overrides", {})
 
     if not repo_path:
         raise ValueError("repo_path is required")
@@ -65,6 +66,7 @@ def main(inputs: dict) -> dict:
         "manual_requirement": manual_requirement,
         "devops_url": devops_url,
         "devops_text": devops_text,
-        "output_path": output_path
+        "output_path": output_path,
+        "config_overrides": config_overrides
     }
     return {"task": task}

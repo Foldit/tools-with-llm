@@ -1,8 +1,15 @@
 {
   "review": {
     "max_files": 20,
+    "warning_max_files": 12,
     "max_diff_chars": 120000,
+    "warning_max_diff_chars": 90000,
     "max_context_chars_per_file": 8000,
+    "warning_max_context_chars_per_file": 6000,
+    "context_lines_before_hunk": 20,
+    "context_lines_after_hunk": 20,
+    "max_context_snippets_per_file": 6,
+    "max_symbol_context_lines": 160,
     "allowed_source_roots": ["src/", "packages/"],
     "excluded_extensions": [".png", ".jpg", ".jpeg", ".gif", ".svg", ".lock", ".map"]
   },
@@ -12,12 +19,15 @@
     "model": "glm-4.5",
     "temperature": 0.2,
     "timeout": 120,
-    "max_tokens": 128000
+    "max_tokens": 128000,
+    "max_retries": 2,
+    "retry_backoff_seconds": 1
   },
   "report": {
     "output_dir": "./output"
   },
   "other": {
-    "cal_token": false
+    "cal_token": false,
+    "token_overflow_strategy": "error"
   }
 }

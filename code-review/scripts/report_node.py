@@ -24,11 +24,36 @@ def format_findings(findings):
     return "\n".join(chunks)
 
 
+def format_context_files(files):
+    if not files:
+        return "- 无"
+
+    return "\n".join(
+        f"- {item.get('file', '')} | strategy={item.get('context_strategy', '')} | "
+        f"hunks={item.get('hunk_count', 0)} | truncated={item.get('context_truncated', False)}"
+        for item in files
+    )
+
+
+def format_manual_confirmation(findings):
+    required = [item for item in findings if item.get("needs_manual_confirmation")]
+    if not required:
+        return "- 无"
+
+    return "\n".join(
+        f"- {item.get('title', '')} ({item.get('file', '')})"
+        for item in required
+    )
+
+
 def main(inputs: dict) -> dict:
     task = inputs["task"]
     requirement_summary = inputs["requirement_summary"]
     diff_result = inputs["diff_result"]
     review_result = inputs["review_result"]
+    context_bundle = inputs.get("context_bundle", {"files": [], "summary": {}})
+    context_summary = context_bundle.get("summary", {})
+    findings = review_result.get("findings", [])
 
     report = f"""# Code Review Report
 
@@ -62,7 +87,7 @@ def main(inputs: dict) -> dict:
 - Decision: {review_result.get("overall_decision", "")}
 - Summary: {review_result.get("summary", "")}
 
-{format_findings(review_result.get("findings", []))}
+{format_findings(findings)}
 
 ## 5. Coverage Assessment
 
@@ -78,7 +103,32 @@ def main(inputs: dict) -> dict:
 ## 6. Change Summary
 {format_list(diff_result.get("change_summary", []))}
 
-## 7. Commits
+## 7. Context Summary
+
+### Context Strategies
+{format_context_files(context_bundle.get("files", []))}
+
+### Skipped Context Files
+{format_list([f"{item.get('file', '')}: {item.get('reason', '')}" for item in context_summary.get("skipped_files", [])])}
+
+### Truncated Context Files
+{format_list(context_summary.get("truncated_files", []))}
+
+## 8. Transparency
+
+### Manual Confirmation Required
+{format_manual_confirmation(findings)}
+
+### Diff Warnings
+{format_list(diff_result.get("warnings", []))}
+
+### Context Warnings
+{format_list(context_summary.get("warnings", []))}
+
+### Skipped Diff Files
+{format_list(diff_result.get("skipped_files", []))}
+
+## 9. Commits
 {format_list(diff_result.get("commit_list", []))}
 """
 

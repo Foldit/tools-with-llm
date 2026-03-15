@@ -1,22 +1,22 @@
+import time
+
 import requests
 from common import safe_json_loads
 
 
 class LLMClient:
-    def __init__(self, base_url: str, api_key: str, model: str, temperature: float = 0.2, timeout: int = 120):
+    def __init__(self, base_url: str, api_key: str, model: str, temperature: float = 0.2, timeout: int = 120,
+                 max_retries: int = 2, retry_backoff_seconds: float = 1):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.temperature = temperature
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_backoff_seconds = retry_backoff_seconds
 
-    def chat_json(self, system_prompt: str, user_prompt: str) -> dict:
-        url = f"{self.base_url}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
-        payload = {
+    def _build_payload(self, system_prompt: str, user_prompt: str) -> dict:
+        return {
             "model": self.model,
             "temperature": self.temperature,
             "messages": [
@@ -25,10 +25,38 @@ class LLMClient:
             ]
         }
 
-        resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"]
+    def _extract_content(self, data: dict) -> str:
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError(f"LLM response missing message content: {data}") from exc
+
+    def chat_json(self, system_prompt: str, user_prompt: str) -> dict:
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+
+        content = ""
+        for attempt in range(1, self.max_retries + 2):
+            try:
+                resp = requests.post(
+                    url,
+                    headers=headers,
+                    json=self._build_payload(system_prompt, user_prompt),
+                    timeout=self.timeout
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = self._extract_content(data)
+                break
+            except (requests.RequestException, ValueError) as exc:
+                if attempt > self.max_retries:
+                    raise RuntimeError(
+                        f"LLM request failed after {attempt} attempts: {exc}"
+                    ) from exc
+                time.sleep(self.retry_backoff_seconds * attempt)
 
         parsed = safe_json_loads(content)
         if parsed is not None:
