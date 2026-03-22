@@ -68,6 +68,15 @@ def format_manual_confirmation(findings):
     )
 
 
+def format_ui_images(images):
+    if not images:
+        return "- 无"
+    return "\n".join(
+        f"- [{item.get('index', '')}] {item.get('source', '')} | detail={item.get('detail', 'auto')} | note={item.get('note', '')}"
+        for item in images
+    )
+
+
 def main(inputs: dict) -> dict:
     task = inputs["task"]
     requirement_summary = inputs["requirement_summary"]
@@ -104,6 +113,10 @@ def main(inputs: dict) -> dict:
 
 ### Unclear Points
 {format_list(requirement_summary.get("unclear_points", []))}
+
+### UI Design Inputs
+- UI Image Count: {requirement_summary.get("ui_image_count", 0)}
+{format_ui_images(requirement_summary.get("ui_images", []))}
 
 ## 3. Overall Decision
 - Decision: {review_result.get("overall_decision", "")}

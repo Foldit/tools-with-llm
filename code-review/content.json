@@ -4,7 +4,23 @@
   "target_branch": "main",
   "source_branch": "feature/order-filter",
   "manual_requirement": "新增订单筛选能力，支持按状态和创建时间筛选，刷新页面后保留筛选条件，不修改导出逻辑。",
+  "requirement_image_notes": "附带了订单列表筛选区域和交互流程UI图，请重点关注组件新增、样式调整和交互一致性。",
+  "requirement_images": [
+    "https://example.com/designs/order-filter-main.png",
+    {
+      "url": "https://example.com/designs/order-filter-flow.png",
+      "note": "筛选弹窗交互流程",
+      "detail": "high"
+    }
+  ],
   "devops_url": "https://devops.example.com/workitem/12345",
   "devops_text": "需求标题：订单列表新增筛选。验收标准：支持状态筛选、时间筛选、刷新后保留最近一次筛选条件。",
+  "config_overrides": {
+    "review": {
+      "max_requirement_images": 5,
+      "max_image_bytes": 2097152,
+      "requirement_image_overflow_strategy": "drop_count_only_with_warning"
+    }
+  },
   "output_path": "/tmp/review-report.md"
 }

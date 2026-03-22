@@ -1,5 +1,8 @@
 import json
 import os
+import base64
+import mimetypes
+import binascii
 from pathlib import Path
 
 import tiktoken
@@ -77,6 +80,153 @@ def truncate_prompt_by_tokens(model_name: str, text: str, max_tokens: int) -> st
         return text
     truncated = encoding.decode(tokens[:max_tokens])
     return truncated + "\n\n[TRUNCATED_FOR_TOKEN_BUDGET]\n"
+
+
+def summarize_requirement_images(requirement_images: list[dict]) -> list[dict]:
+    summary = []
+    for index, item in enumerate(requirement_images, 1):
+        source = item.get("source", "")
+        note = item.get("note", "")
+        detail = item.get("detail", "auto")
+
+        display_source = source
+        if source and not (source.startswith("http://") or source.startswith("https://") or source.startswith("data:")):
+            display_source = os.path.basename(source)
+
+        summary.append({
+            "index": index,
+            "source": display_source,
+            "note": note,
+            "detail": detail
+        })
+    return summary
+
+
+def estimate_data_url_bytes(data_url: str) -> int | None:
+    if not data_url.startswith("data:"):
+        return None
+    try:
+        header, payload = data_url.split(",", 1)
+    except ValueError:
+        return None
+
+    if ";base64" in header:
+        try:
+            return len(base64.b64decode(payload, validate=True))
+        except (ValueError, binascii.Error):
+            return None
+    return len(payload.encode("utf-8"))
+
+
+def validate_requirement_images_limits(requirement_images: list[dict], config: dict) -> tuple[list[dict], list[str]]:
+    warnings: list[str] = []
+    review_config = config.get("review", {})
+    max_requirement_images = int(review_config.get("max_requirement_images", 5))
+    max_image_bytes = int(review_config.get("max_image_bytes", 2 * 1024 * 1024))
+    overflow_strategy = review_config.get("requirement_image_overflow_strategy", "error")
+
+    valid_strategies = ["error", "drop_with_warning", "drop_count_only_with_warning"]
+    if overflow_strategy not in valid_strategies:
+        raise ValueError(
+            "requirement_image_overflow_strategy must be one of: error, drop_with_warning, drop_count_only_with_warning"
+        )
+
+    working_images = list(requirement_images)
+
+    image_count = len(working_images)
+    if image_count > max_requirement_images:
+        if overflow_strategy == "error":
+            raise ValueError(
+                f"requirement_images count ({image_count}) exceeds max_requirement_images ({max_requirement_images})"
+            )
+        dropped_count = image_count - max_requirement_images
+        working_images = working_images[:max_requirement_images]
+        warnings.append(
+            f"requirement_images overflow: dropped tail images count={dropped_count} by strategy=drop_with_warning"
+        )
+
+    kept_images: list[dict] = []
+    for index, image in enumerate(working_images, 1):
+        source = image.get("source", "")
+        if not source:
+            kept_images.append(image)
+            continue
+
+        if source.startswith("http://") or source.startswith("https://"):
+            warnings.append(f"requirement_images[{index}] is a remote URL; size unchecked")
+            kept_images.append(image)
+            continue
+
+        if source.startswith("data:"):
+            image_bytes = estimate_data_url_bytes(source)
+            if image_bytes is None:
+                warnings.append(f"requirement_images[{index}] data URL size parse failed; size unchecked")
+                kept_images.append(image)
+                continue
+            if image_bytes > max_image_bytes:
+                if overflow_strategy in ["error", "drop_count_only_with_warning"]:
+                    raise ValueError(
+                        f"requirement_images[{index}] size ({image_bytes}) exceeds max_image_bytes ({max_image_bytes})"
+                    )
+                warnings.append(
+                    f"requirement_images[{index}] dropped due to size overflow: {image_bytes} > {max_image_bytes}"
+                )
+                continue
+            kept_images.append(image)
+            continue
+
+        image_bytes = os.path.getsize(source)
+        if image_bytes > max_image_bytes:
+            if overflow_strategy in ["error", "drop_count_only_with_warning"]:
+                raise ValueError(
+                    f"requirement_images[{index}] size ({image_bytes}) exceeds max_image_bytes ({max_image_bytes})"
+                )
+            warnings.append(
+                f"requirement_images[{index}] dropped due to size overflow: {image_bytes} > {max_image_bytes}"
+            )
+            continue
+        kept_images.append(image)
+
+    return kept_images, warnings
+
+
+def build_image_data_url(local_path: str) -> str:
+    mime_type, _ = mimetypes.guess_type(local_path)
+    if not mime_type:
+        mime_type = "application/octet-stream"
+
+    with open(local_path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def build_requirement_user_content(user_prompt: str, requirement_images: list[dict]) -> str | list[dict]:
+    if not requirement_images:
+        return user_prompt
+
+    content_blocks: list[dict] = [{"type": "text", "text": user_prompt}]
+    for index, image in enumerate(requirement_images, 1):
+        source = image.get("source", "")
+        note = image.get("note", "")
+        detail = image.get("detail", "auto") or "auto"
+
+        if source.startswith("http://") or source.startswith("https://") or source.startswith("data:"):
+            image_url = source
+        else:
+            image_url = build_image_data_url(source)
+
+        if note:
+            content_blocks.append({"type": "text", "text": f"UI图{index}补充说明: {note}"})
+
+        content_blocks.append({
+            "type": "image_url",
+            "image_url": {
+                "url": image_url,
+                "detail": detail
+            }
+        })
+
+    return content_blocks
 
 
 def prepare_prompt_with_budget(config: dict, step_name: str, system_prompt: str, user_prompt: str) -> tuple[str, list[str]]:
@@ -203,14 +353,20 @@ def normalize_review_result(raw_result: dict) -> tuple[dict, list[str]]:
 def run_requirement_step(llm: LLMClient, task: dict, config: dict) -> dict:
     system_prompt = load_prompt("requirement_system.txt")
     user_template = load_prompt("requirement_user.txt")
+    requirement_images_raw = task.get("requirement_images", [])
+    requirement_image_notes = task.get("requirement_image_notes", "")
+    requirement_images, image_limit_warnings = validate_requirement_images_limits(requirement_images_raw, config)
     user_prompt = render_template(user_template, {
         "task.manual_requirement": task["manual_requirement"],
         "task.devops_url": task.get("devops_url", ""),
-        "task.devops_text": task.get("devops_text", "")
+        "task.devops_text": task.get("devops_text", ""),
+        "task.requirement_image_notes": requirement_image_notes,
+        "task.requirement_images_summary": summarize_requirement_images(requirement_images)
     })
 
     user_prompt, token_warnings = prepare_prompt_with_budget(config, "requirement_step", system_prompt, user_prompt)
-    result = llm.chat_json(system_prompt, user_prompt)
+    user_content = build_requirement_user_content(user_prompt, requirement_images)
+    result = llm.chat_json(system_prompt, user_content)
     normalized = {
         "title": result.get("title", ""),
         "business_goal": result.get("business_goal", []),
@@ -221,8 +377,12 @@ def run_requirement_step(llm: LLMClient, task: dict, config: dict) -> dict:
         "main_source": result.get("main_source", "manual_requirement"),
         "summary": result.get("summary", "")
     }
-    if token_warnings:
-        normalized["warnings"] = token_warnings
+    if requirement_images:
+        normalized["ui_image_count"] = len(requirement_images)
+        normalized["ui_images"] = summarize_requirement_images(requirement_images)
+    warnings = image_limit_warnings + token_warnings
+    if warnings:
+        normalized["warnings"] = warnings
     return normalized
 
 

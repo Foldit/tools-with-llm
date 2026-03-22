@@ -1,4 +1,5 @@
 import time
+from typing import Any
 
 import requests
 from common import safe_json_loads
@@ -15,13 +16,13 @@ class LLMClient:
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
 
-    def _build_payload(self, system_prompt: str, user_prompt: str) -> dict:
+    def _build_payload(self, system_prompt: str, user_content: str | list[dict[str, Any]]) -> dict:
         return {
             "model": self.model,
             "temperature": self.temperature,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_content}
             ]
         }
 
@@ -31,7 +32,7 @@ class LLMClient:
         except (KeyError, IndexError, TypeError) as exc:
             raise ValueError(f"LLM response missing message content: {data}") from exc
 
-    def chat_json(self, system_prompt: str, user_prompt: str) -> dict:
+    def chat_json(self, system_prompt: str, user_content: str | list[dict[str, Any]]) -> dict:
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Content-Type": "application/json",
@@ -44,7 +45,7 @@ class LLMClient:
                 resp = requests.post(
                     url,
                     headers=headers,
-                    json=self._build_payload(system_prompt, user_prompt),
+                    json=self._build_payload(system_prompt, user_content),
                     timeout=self.timeout
                 )
                 resp.raise_for_status()

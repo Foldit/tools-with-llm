@@ -18,6 +18,9 @@
     "strict_hunk_validation": true,
     "max_hunks_per_file": 12,
     "warning_max_hunks_per_file": 8,
+    "max_requirement_images": 5,
+    "max_image_bytes": 2097152,
+    "requirement_image_overflow_strategy": "error",
     "allowed_source_roots": ["src/", "packages/"],
     "excluded_extensions": [".png", ".jpg", ".jpeg", ".gif", ".svg", ".lock", ".map"]
   },

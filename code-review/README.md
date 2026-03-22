@@ -31,6 +31,14 @@
 - `source_branch`：待审核分支
 - `manual_requirement`：需求说明
 
+可选字段（多模态需求输入）：
+
+- `requirement_image_notes`：UI 图补充说明（例如重点关注交互、样式、组件边界）
+- `requirement_images`：UI 设计图数组，支持：
+	- 远程 URL 字符串（`https://...`）
+	- 本地路径字符串（会自动转 data URL）
+	- 对象：`{"url"|"path"|"source": "...", "note": "...", "detail": "low|auto|high"}`
+
 示例：
 
 ```json
@@ -40,6 +48,15 @@
 	"target_branch": "main",
 	"source_branch": "feature/order-filter",
 	"manual_requirement": "新增订单筛选能力，支持按状态和创建时间筛选，刷新页面后保留筛选条件。",
+	"requirement_image_notes": "附带UI稿，请重点关注筛选区域组件拆分、样式一致性和交互可达性。",
+	"requirement_images": [
+		"https://example.com/designs/order-filter-main.png",
+		{
+			"url": "https://example.com/designs/order-filter-flow.png",
+			"note": "筛选弹窗交互流程",
+			"detail": "high"
+		}
+	],
 	"devops_url": "",
 	"devops_text": "",
 	"output_path": "./output/review-report.md"
@@ -101,6 +118,9 @@ python code-review/scripts/chat_handler.py code-review/content.json
 - `review.strict_hunk_validation`：是否启用 hunk 计数严格校验并统计异常
 - `review.max_hunks_per_file`：单文件最多保留的 hunk 数（超出后局部优先）
 - `review.warning_max_hunks_per_file`：单文件 hunk 数告警阈值
+- `review.max_requirement_images`：单次需求解析允许携带的图片数量上限（超出会报错）
+- `review.max_image_bytes`：单张图片大小上限（字节），用于限制本地图片/data URL 体积（超出会报错）
+- `review.requirement_image_overflow_strategy`：图片超限策略，支持 `error`、`drop_with_warning`、`drop_count_only_with_warning`
 
 ## 新增行为说明
 
@@ -133,6 +153,20 @@ python code-review/scripts/chat_handler.py code-review/content.json
 - review 结果增加 schema 归一化与降级处理
 - `findings` 要求 evidence 必填（`file` + `line` + `snippet`），不满足会被丢弃并写入 warning
 - token 超限支持 `truncate_retry`：自动收缩 user prompt 直到预算内再重试
+
+### 5) 多模态需求输入（UI 图）
+
+- 需求解析步骤支持 text + image 多模态输入，UI 图可用于补充组件新增、样式修改、交互路径
+- 当图片与文字冲突时，仍以 `manual_requirement` 为最高优先级
+- 报告中的 Requirement Summary 会展示 `UI Image Count` 和图像列表，便于审计输入来源
+- 输入前会执行图片数量与大小校验，防止请求体过大；远程 URL 无法本地预估大小时会记录 warning
+- 当 `requirement_image_overflow_strategy=drop_with_warning` 时：
+	- 图片数量超限会自动丢弃尾部图片
+	- 图片大小超限会自动丢弃超限图片
+	- 丢弃行为会写入 Requirement Warnings
+- 当 `requirement_image_overflow_strategy=drop_count_only_with_warning` 时：
+	- 图片数量超限会自动丢弃尾部图片并记录 warning
+	- 图片大小超限仍然报错（不自动丢弃）
 
 ## 当前限制
 

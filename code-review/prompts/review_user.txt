@@ -10,7 +10,11 @@
       "severity": "critical|major|minor|suggestion",
       "category": "requirement|typescript|vue3|react|test|maintainability|risk",
       "file": "",
-      "evidence": "",
+      "evidence": {
+        "file": "",
+        "line": 0,
+        "snippet": ""
+      },
       "impact": "",
       "recommendation": "",
       "needs_manual_confirmation": false

@@ -20,3 +20,9 @@ DevOps URL：
 
 DevOps 文本：
 {{task.devops_text}}
+
+UI设计图补充说明（可选）：
+{{task.requirement_image_notes}}
+
+UI设计图列表（可选）：
+{{task.requirement_images_summary}}
